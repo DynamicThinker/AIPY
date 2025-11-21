@@ -1,0 +1,162 @@
+import heapq
+import random
+
+# ================================================================
+#                    CONFIG + DATA SETUP
+# ================================================================
+
+# Graph of bus stops (travel_time in minutes)
+graph = {
+    "A": {"B": 4, "C": 2},
+    "B": {"A": 4, "D": 5, "E": 10},
+    "C": {"A": 2, "D": 3},
+    "D": {"C": 3, "B": 5, "E": 4, "F": 6},
+    "E": {"B": 10, "D": 4, "F": 3},
+    "F": {"D": 6, "E": 3}
+}
+
+# Passenger demand (dynamic)
+passengers = {
+    "A": 12, "B": 30, "C": 19,
+    "D": 45, "E": 22, "F": 28
+}
+
+# Peak hour weight (higher = more urgent routes)
+peak_factor = {
+    "A": 1.1, "B": 1.4, "C": 1.2,
+    "D": 1.8, "E": 1.3, "F": 1.5
+}
+
+# Live congestion factor (randomized but adaptive)
+def get_congestion(edge_time):
+    # 20–70% fluctuation
+    return edge_time * random.uniform(1.2, 1.7)
+
+# Bus constraints
+buses = [
+    {"name": "Bus-1", "start": "A", "fuel_limit": 22},
+    {"name": "Bus-2", "start": "C", "fuel_limit": 18}
+]
+
+# ================================================================
+#                    DIJKSTRA WITH CONGESTION
+# ================================================================
+
+def dijkstra(start):
+    pq = [(0, start)]
+    dist = {node: float("inf") for node in graph}
+    parent = {node: None for node in graph}
+    
+    dist[start] = 0
+
+    while pq:
+        current_dist, node = heapq.heappop(pq)
+
+        if current_dist > dist[node]:
+            continue
+
+        for neighbor, base_time in graph[node].items():
+            time_with_traffic = get_congestion(base_time)
+            new_dist = current_dist + time_with_traffic
+
+            if new_dist < dist[neighbor]:
+                dist[neighbor] = new_dist
+                parent[neighbor] = node
+                heapq.heappush(pq, (new_dist, neighbor))
+
+    return dist, parent
+
+
+# ================================================================
+#                    ROUTE ANALYTICS & SCORING
+# ================================================================
+
+def stop_priority():
+    scores = {}
+    for stop in passengers:
+        demand = passengers[stop]
+        time_factor = peak_factor[stop]
+        scores[stop] = demand * time_factor
+    return scores
+
+
+def reconstruct(parent, target):
+    path = []
+    while target:
+        path.append(target)
+        target = parent[target]
+    return list(reversed(path))
+
+
+def compute_wait_improvement(dist):
+    before = sum(passengers[s] * 12 for s in passengers)
+    after = sum(dist[s] * passengers[s] for s in passengers)
+    return before - after
+
+
+# ================================================================
+#                    MULTI BUS ROUTING LOGIC
+# ================================================================
+
+def assign_routes():
+    scores = stop_priority()
+    sorted_stops = sorted(scores, key=lambda x: scores[x], reverse=True)
+
+    assigned = {bus["name"]: [] for bus in buses}
+    visited = set()
+
+    for bus in buses:
+        start = bus["start"]
+        fuel_left = bus["fuel_limit"]
+
+        dist, parent = dijkstra(start)
+
+        for stop in sorted_stops:
+            if stop in visited:
+                continue
+
+            travel_cost = dist[stop]
+
+            if travel_cost <= fuel_left:
+                path = reconstruct(parent, stop)
+                assigned[bus["name"]].append((stop, path, travel_cost))
+
+                fuel_left -= travel_cost
+                visited.add(stop)
+
+    return assigned
+
+
+# ================================================================
+#                            EXECUTION
+# ================================================================
+
+routes = assign_routes()
+
+print("\n🚍 SMART CITY BUS ROUTING — OPTIMIZED RESULTS\n")
+print("---------------------------------------------------")
+
+total_reduction = 0
+
+for bus in routes:
+    print(f"\n🚌 {bus} Route Plan:")
+    print("---------------------------------------------------")
+
+    if not routes[bus]:
+        print("❌ No stops assigned.")
+        continue
+
+    for stop, path, travel_time in routes[bus]:
+        print(f"➡ Destination: {stop}")
+        print(f"   Path       : {' → '.join(path)}")
+        print(f"   ETA        : {round(travel_time, 2)} mins")
+        print(f"   Demand     : {passengers[stop]} passengers")
+        print("-" * 50)
+
+    # compute wait improvement for first route only
+    dist, _ = dijkstra(routes[bus][0][1][0])
+    reduction = compute_wait_improvement(dist)
+    total_reduction += max(0, reduction)
+
+print(f"\n📊 Total Passenger Wait Time Reduction: ⭐ {round(total_reduction, 2)} minutes")
+print("\n=========================================================\n")

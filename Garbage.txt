@@ -1,0 +1,124 @@
+import numpy as np
+import heapq
+import matplotlib.pyplot as plt
+
+# -------------------------------------------------------
+# City Grid Setup (Graph)
+# -------------------------------------------------------
+
+# Create a 6x6 grid graph (nodes 0–35)
+N = 6
+nodes = N * N
+
+def node(r, c):
+    return r * N + c
+
+# Build adjacency list
+graph = {i: [] for i in range(nodes)}
+
+for r in range(N):
+    for c in range(N):
+        u = node(r, c)
+        if r > 0: graph[u].append((node(r-1, c), 1))
+        if r < N-1: graph[u].append((node(r+1, c), 1))
+        if c > 0: graph[u].append((node(r, c-1), 1))
+        if c < N-1: graph[u].append((node(r, c+1), 1))
+
+# -------------------------------------------------------
+# Dijkstra (Shortest Path)
+# -------------------------------------------------------
+
+def dijkstra(start, goal):
+    dist = {i: float('inf') for i in range(nodes)}
+    dist[start] = 0
+    pq = [(0, start)]
+    
+    while pq:
+        d, u = heapq.heappop(pq)
+        if u == goal:
+            return d
+        if d > dist[u]:
+            continue
+        for v, w in graph[u]:
+            nd = d + w
+            if nd < dist[v]:
+                dist[v] = nd
+                heapq.heappush(pq, (nd, v))
+    return dist[goal]
+
+# -------------------------------------------------------
+# Waste Bin Locations + Depot
+# -------------------------------------------------------
+
+depot = node(0, 0)
+bins = [node(2, 3), node(5, 1), node(4, 4), node(1, 5), node(3, 2)]
+np.random.shuffle(bins)
+
+# -------------------------------------------------------
+# Baseline Random Routing
+# -------------------------------------------------------
+
+def random_route():
+    order = bins.copy()
+    np.random.shuffle(order)
+    
+    total = 0
+    curr = depot
+    
+    for b in order:
+        total += abs(curr - b)  # stupid baseline: Manhattan-ish
+        curr = b
+    
+    total += abs(curr - depot)
+    return total
+
+baseline_distance = random_route()
+
+# -------------------------------------------------------
+# Optimized Routing using Greedy Dijkstra (Nearest-Next)
+# -------------------------------------------------------
+
+def optimized_route():
+    unvisited = bins.copy()
+    curr = depot
+    total = 0
+    
+    while unvisited:
+        # choose nearest bin by Dijkstra
+        dists = [(dijkstra(curr, b), b) for b in unvisited]
+        d, nearest = min(dists)
+        
+        total += d
+        curr = nearest
+        unvisited.remove(nearest)
+        
+    # return to depot
+    total += dijkstra(curr, depot)
+    return total
+
+optimized_distance = optimized_route()
+
+# -------------------------------------------------------
+# Travel Time Calculation (speed = 1 unit/sec)
+# -------------------------------------------------------
+
+baseline_time = baseline_distance * 1
+optimized_time = optimized_distance * 1
+
+# -------------------------------------------------------
+# Plot Comparison
+# -------------------------------------------------------
+
+plt.figure(figsize=(8,5))
+plt.bar(["Baseline", "Optimized"], [baseline_distance, optimized_distance])
+plt.ylabel("Total Travel Distance")
+plt.title("Garbage Collection Routing — Distance Comparison")
+plt.grid(axis="y")
+plt.show()
+
+plt.figure(figsize=(8,5))
+plt.bar(["Baseline", "Optimized"], [baseline_time, optimized_time])
+plt.ylabel("Total Time (sec)")
+plt.title("Garbage Collection Routing — Time Comparison")
+plt.grid(axis="y")
+plt.show()

@@ -1,0 +1,185 @@
+import random
+import time
+import sys
+
+# --- Configuration ---
+NUM_HOUSES = 5
+TOTAL_SOURCE_SUPPLY = 200  # Total units of water available per tick
+PIPE_PRESSURE_LIMIT = 50   # Max flow allowed through a single pipe
+SIMULATION_TICKS = 20
+
+class House:
+    """
+    Represents a consumer node (House) with fluctuating water demand.
+    """
+    def __init__(self, name, base_demand):
+        self.name = name
+        self.base_demand = base_demand
+        self.current_demand = base_demand
+        self.received_water = 0
+        self.satisfaction = 100.0
+
+    def update_demand(self):
+        # Randomly fluctuate demand (e.g., someone takes a shower)
+        fluctuation = random.randint(-5, 10)
+        self.current_demand = max(5, self.base_demand + fluctuation)
+
+    def receive(self, amount):
+        self.received_water = amount
+        # Calculate satisfaction (percentage of demand met)
+        if self.current_demand > 0:
+            self.satisfaction = min(100.0, (self.received_water / self.current_demand) * 100)
+        else:
+            self.satisfaction = 100.0
+
+    def __repr__(self):
+        return f"{self.name} (Demand: {self.current_demand})"
+
+class ValveAgent:
+    """
+    The AI Agent. It controls a valve to a specific house.
+    Objective: Meet house demand subject to system constraints.
+    """
+    def __init__(self, house, priority=1):
+        self.house = house
+        self.priority = priority # Higher priority gets water first in shortages
+        self.flow_rate = 0
+
+    def calculate_request(self):
+        """
+        Agent determines how much water it *wants* based on its house's demand.
+        """
+        return self.house.current_demand
+
+    def set_flow(self, allocated_amount):
+        """
+        Agent adjusts the valve based on what the central system allocated.
+        Constraint Check: Ensure we don't exceed pipe pressure limits.
+        """
+        # Constraint: Pipe Pressure Safety
+        if allocated_amount > PIPE_PRESSURE_LIMIT:
+            print(f"  ⚠️ ALERT: Agent {self.house.name} throttling flow! Request {allocated_amount} exceeds limit {PIPE_PRESSURE_LIMIT}.")
+            self.flow_rate = PIPE_PRESSURE_LIMIT
+        else:
+            self.flow_rate = allocated_amount
+        
+        # Deliver to house
+        self.house.receive(self.flow_rate)
+
+class WaterSupplyController:
+    """
+    The Central Constraint Solver.
+    It receives requests from all Agents and distributes the limited supply.
+    """
+    def __init__(self, source_limit):
+        self.source_limit = source_limit
+        self.agents = []
+
+    def add_agent(self, agent):
+        self.agents.append(agent)
+
+    def optimize_distribution(self):
+        """
+        CONSTRAINT SATISFACTION ALGORITHM:
+        1. Collect all demands (Ideal State).
+        2. Check if Total Demand <= Total Supply.
+        3. If Supply is low, reduce flow to lower priority agents first.
+        """
+        requests = {agent: agent.calculate_request() for agent in self.agents}
+        total_demand = sum(requests.values())
+        
+        allocations = {}
+
+        if total_demand <= self.source_limit:
+            # Happy Path: Enough water for everyone
+            allocations = requests
+            status = "OPTIMAL"
+        else:
+            # Constraint Violation: Demand > Supply.
+            # Strategy: Proportional Cutbacks based on Priority.
+            status = "SHORTAGE"
+            available = self.source_limit
+            
+            # Sort agents by priority (Higher priority processed first)
+            # In a real CSP, this might be a complex solver. Here we use a greedy priority fill.
+            sorted_agents = sorted(self.agents, key=lambda x: x.priority, reverse=True)
+            
+            for agent in sorted_agents:
+                req = requests[agent]
+                if available >= req:
+                    allocations[agent] = req
+                    available -= req
+                else:
+                    allocations[agent] = available # Take what's left
+                    available = 0
+        
+        # Finalize: Tell agents to actuate valves
+        for agent in self.agents:
+            agent.set_flow(allocations.get(agent, 0))
+
+        return status, total_demand
+
+    def print_dashboard(self, tick):
+        print(f"\n--- TICK {tick} REPORT ---")
+        print(f"{'House':<10} | {'Demand':<8} | {'Flow':<8} | {'Status':<10}")
+        print("-" * 45)
+        for agent in self.agents:
+            status_icon = "🟢" if agent.house.satisfaction >= 95 else "🔴" if agent.house.satisfaction < 50 else "🟡"
+            print(f"{agent.house.name:<10} | {agent.house.current_demand:<8} | {agent.flow_rate:<8} | {status_icon} {agent.house.satisfaction:.0f}%")
+        print("-" * 45)
+
+        # Ascii Chart for Visualization
+        print("\n[Flow Distribution Chart]")
+        for agent in self.agents:
+            bar = "█" * int(agent.flow_rate / 5)
+            print(f"{agent.house.name}: {bar} ({agent.flow_rate})")
+
+# --- Main Simulation Loop ---
+def run_water_optimization():
+    print("Initializing Water Supply Optimizer...")
+    print(f"System Capacity: {TOTAL_SOURCE_SUPPLY} units")
+    print(f"Pipe Safety Limit: {PIPE_PRESSURE_LIMIT} units\n")
+
+    # Create Environment
+    controller = WaterSupplyController(TOTAL_SOURCE_SUPPLY)
+
+    # Create Agents for Houses
+    # Note: Hospital has higher priority than residential
+    h1 = House("Hospital", 40)
+    a1 = ValveAgent(h1, priority=10)
+    
+    h2 = House("Factory", 60)
+    a2 = ValveAgent(h2, priority=5)
+    
+    h3 = House("Suburb A", 30)
+    a3 = ValveAgent(h3, priority=1)
+    
+    h4 = House("Suburb B", 30)
+    a4 = ValveAgent(h4, priority=1)
+    
+    h5 = House("Farm", 50)
+    a5 = ValveAgent(h5, priority=2)
+
+    controller.add_agent(a1)
+    controller.add_agent(a2)
+    controller.add_agent(a3)
+    controller.add_agent(a4)
+    controller.add_agent(a5)
+
+    # Run Simulation
+    for tick in range(1, SIMULATION_TICKS + 1):
+        # 1. Environment Changes (Demands fluctuate)
+        for agent in controller.agents:
+            agent.house.update_demand()
+
+        # 2. AI Logic (Optimizer solves allocation)
+        status, total_demand = controller.optimize_distribution()
+        
+        # 3. Reporting
+        print(f"\n[System State: {status}] Demand: {total_demand}/{TOTAL_SOURCE_SUPPLY}")
+        controller.print_dashboard(tick)
+        
+        # time.sleep(0.5) # Uncomment for real-time pace
+
+if __name__ == "__main__":
+    run_water_optimization()

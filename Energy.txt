@@ -1,0 +1,245 @@
+# Full Energy Distribution Agents notebook (code-only). Paste into a Kaggle notebook cell-by-cell or as one cell.
+
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# reproducibility
+np.random.seed(42)
+
+# -------------------------
+# City / Buildings Setup
+# -------------------------
+buildings = ["Hospital", "DataCenter", "Office", "Residential"]
+priority = {"Hospital": 4, "DataCenter": 3, "Office": 2, "Residential": 1}
+
+# baseline demand (per building)
+base_demand = {b: np.random.randint(30, 60) for b in buildings}
+
+# initial supply available to each building at start of timestep
+initial_supply = {b: 50 for b in buildings}
+
+# demand generator (adds realistic small fluctuations)
+def generate_demand(step=None):
+    # optionally could use step for day/night cycles; here simple noise around baseline
+    return {b: max(0, base_demand[b] + np.random.randint(-10, 10)) for b in buildings}
+
+# -------------------------
+# Rule-based Balancer (normal agent)
+# -------------------------
+def balance_energy(demand, supply):
+    """
+    Priority-based redistribution:
+    - Calculate surplus/deficit per building
+    - For each building in descending priority, if it needs energy, pull from buildings with surplus
+    Returns: imbalance_before, imbalance_after, modified_supply
+    """
+    imbalance_before = sum(abs(supply[b] - demand[b]) for b in buildings)
+    # compute surplus (positive means excess energy)
+    surplus = {b: supply[b] - demand[b] for b in buildings}
+
+    # priority order: highest priority served first
+    for b in sorted(buildings, key=lambda x: -priority[x]):
+        if surplus[b] < 0:  # needs energy
+            required = -surplus[b]
+            # donors sorted by largest surplus first
+            for donor in sorted(buildings, key=lambda x: surplus[x], reverse=True):
+                if donor == b:
+                    continue
+                if surplus[donor] > 0 and required > 0:
+                    give = min(required, surplus[donor])
+                    supply[donor] -= give
+                    supply[b] += give
+                    surplus[donor] -= give
+                    required -= give
+            surplus[b] = -(max(0, required))  # updated (if remain needs)
+
+    imbalance_after = sum(abs(supply[b] - demand[b]) for b in buildings)
+    return imbalance_before, imbalance_after, supply
+
+# -------------------------
+# AERA: Adaptive Emergency Response Agent
+# -------------------------
+demand_history = {b: [] for b in buildings}
+
+def detect_emergency(demand, history, threshold=2.5, min_history=8):
+    """
+    Detect anomalies using z-score per building.
+    Returns list of buildings flagged as emergency.
+    """
+    emergencies = []
+    for b in buildings:
+        history[b].append(demand[b])
+        # keep history bounded to last 100 to avoid unlimited growth
+        if len(history[b]) > 200:
+            history[b].pop(0)
+        if len(history[b]) < min_history:
+            continue
+        mu = np.mean(history[b])
+        sigma = np.std(history[b]) + 1e-6
+        z = abs((demand[b] - mu) / sigma)
+        if z > threshold:
+            emergencies.append(b)
+    return emergencies
+
+def emergency_response(building, demand, supply):
+    """
+    Emergency rebalancing: try to rescue 'building' by pulling from all other buildings.
+    Donor selection: prefer lower-priority donors first (so hospital gets from residential etc).
+    """
+    need = demand[building] - supply[building]
+    if need <= 0:
+        return supply
+
+    # donors: lowest priority first to preserve high-priority donors
+    donors = sorted([d for d in buildings if d != building], key=lambda b: priority[b])
+    for d in donors:
+        surplus = supply[d] - demand[d]
+        if surplus > 0 and need > 0:
+            give = min(surplus, need)
+            supply[d] -= give
+            supply[building] += give
+            need -= give
+        if need <= 0:
+            break
+
+    # if still need, attempt requesting grid boost (modeled as global temporary extra supply)
+    if need > 0:
+        grid_boost = need  # simulate requesting remaining from grid
+        supply[building] += grid_boost
+        need = 0
+
+    return supply
+
+# -------------------------
+# Simulation: Normal agent vs Normal+AERA
+# -------------------------
+steps = 60
+
+imb_before = []
+imb_after_normal = []
+imb_after_aera = []
+emergency_flags = []
+records = []  # keep per-step details if you want to inspect later
+
+for t in range(steps):
+    demand = generate_demand(step=t)
+    # reset supply each step to initial supply (could be persistent if modeling storage)
+    supply = initial_supply.copy()
+
+    # detect emergencies using history
+    emergencies = detect_emergency(demand, demand_history)
+    emergency_flags.append(1 if len(emergencies) > 0 else 0)
+
+    # normal balancing
+    before, after_normal, supply_after_normal = balance_energy(demand, supply.copy())
+
+    # apply AERA if emergencies detected
+    supply_after_aera = supply_after_normal.copy()
+    if emergencies:
+        # handle each emergency building (could be multiple)
+        for b in emergencies:
+            supply_after_aera = emergency_response(b, demand, supply_after_aera)
+
+    after_aera = sum(abs(supply_after_aera[b] - demand[b]) for b in buildings)
+
+    # record metrics
+    imb_before.append(before)
+    imb_after_normal.append(after_normal)
+    imb_after_aera.append(after_aera)
+
+    # store detail row
+    records.append({
+        "step": t,
+        "demand": demand,
+        "before": before,
+        "after_normal": after_normal,
+        "after_aera": after_aera,
+        "emergencies": emergencies
+    })
+
+# -------------------------
+# Summary statistics
+# -------------------------
+avg_before = np.mean(imb_before)
+avg_after_normal = np.mean(imb_after_normal)
+avg_after_aera = np.mean(imb_after_aera)
+
+print("Average total imbalance (before balancing): {:.3f}".format(avg_before))
+print("Average total imbalance (after normal agent): {:.3f}".format(avg_after_normal))
+print("Average total imbalance (after AERA): {:.3f}".format(avg_after_aera))
+print("Emergency events detected:", sum(emergency_flags), "out of", steps, "timesteps")
+
+# -------------------------
+# Plots
+# -------------------------
+plt.figure(figsize=(12,6))
+plt.plot(imb_before, label="Before Balancing", linewidth=2)
+plt.plot(imb_after_normal, label="After Normal Agent", linewidth=2)
+plt.plot(imb_after_aera, label="After AERA", linewidth=3)
+for t, flag in enumerate(emergency_flags):
+    if flag:
+        plt.axvline(t, color='red', alpha=0.18)
+plt.title("Energy Load Balance Efficiency — Before / Normal / AERA")
+plt.xlabel("Time Step")
+plt.ylabel("Total Imbalance")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+# Per-building supply vs demand snapshot at final timestep (visual)
+final = records[-1]
+final_demand = final["demand"]
+
+# Re-run balancing on final step to capture final supply distributions (for plotting)
+supply0 = initial_supply.copy()
+_, _, supply_normal_final = balance_energy(final_demand, supply0.copy())
+supply_aera_final = supply_normal_final.copy()
+if final["emergencies"]:
+    for b in final["emergencies"]:
+        supply_aera_final = emergency_response(b, final_demand, supply_aera_final)
+
+df = pd.DataFrame({
+    "building": buildings,
+    "demand": [final_demand[b] for b in buildings],
+    "supply_before": [initial_supply[b] for b in buildings],
+    "supply_after_normal": [supply_normal_final[b] for b in buildings],
+    "supply_after_aera": [supply_aera_final[b] for b in buildings]
+})
+
+# bar chart comparing demand and supplies for final timestep
+x = np.arange(len(buildings))
+width = 0.18
+plt.figure(figsize=(10,5))
+plt.bar(x - width, df["demand"], width=width, label="Demand")
+plt.bar(x, df["supply_before"], width=width, label="Supply (initial)")
+plt.bar(x + width, df["supply_after_normal"], width=width, label="Supply (after normal)")
+plt.bar(x + 2*width, df["supply_after_aera"], width=width, label="Supply (after AERA)")
+plt.xticks(x + width/2, buildings)
+plt.ylabel("Energy Units")
+plt.title("Final Timestep: Demand vs Supply (per building)")
+plt.legend()
+plt.grid(axis="y")
+plt.show()
+
+# Imbalance reduction rate over time (percent improvement of AERA vs normal)
+improvement = [(n - a) / n * 100 if n != 0 else 0 for n, a in zip(imb_after_normal, imb_after_aera)]
+plt.figure(figsize=(12,4))
+plt.plot(improvement, linewidth=2)
+plt.title("Percent Imbalance Reduction by AERA vs Normal Agent (per timestep)")
+plt.xlabel("Time Step")
+plt.ylabel("Percent Improvement (%)")
+plt.grid(True)
+plt.show()
+
+# Save records to a DataFrame for further analysis if needed
+records_df = pd.DataFrame([{
+    "step": r["step"],
+    "before": r["before"],
+    "after_normal": r["after_normal"],
+    "after_aera": r["after_aera"],
+    "emergency": 1 if r["emergencies"] else 0
+} for r in records])
+
+# show head of records
+print(records_df.head())

@@ -1,0 +1,145 @@
+import heapq
+import random
+
+# ------------------------------
+# CONFIG (change these if needed)
+# ------------------------------
+NUM_BUSES = 3
+SIM_STEPS = 150
+SPAWN_RATE = 0.30  # chance a passenger appears per node per tick
+nodes = ["A", "B", "C", "D", "E", "F"]  # city stops
+
+# Graph edges: (node1, node2, travel_time)
+edges = {
+    ("A", "B"): 2, ("B", "C"): 2, ("C", "D"): 3,
+    ("D", "E"): 2, ("E", "F"): 2, ("A", "F"): 4,
+    ("B", "E"): 3
+}
+
+# Build adjacency list
+graph = {n: [] for n in nodes}
+for (u, v), w in edges.items():
+    graph[u].append((v, w))
+    graph[v].append((u, w))
+
+
+# ------------------------------
+# DIJKSTRA SHORTEST PATH
+# ------------------------------
+def shortest_path(start):
+    dist = {n: float('inf') for n in nodes}
+    dist[start] = 0
+    pq = [(0, start)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d > dist[u]: continue
+        for v, w in graph[u]:
+            if d + w < dist[v]:
+                dist[v] = d + w
+                heapq.heappush(pq, (dist[v], v))
+    return dist
+
+
+# ------------------------------
+# PASSENGER + BUS STORE (no OOP)
+# ------------------------------
+passengers = []  # (origin, destination, spawn_time, picked)
+waiting = {n: [] for n in nodes}
+
+# bus positions (start spread)
+bus_locations = [nodes[i % len(nodes)] for i in range(NUM_BUSES)]
+
+
+# ------------------------------
+# SIMULATION
+# ------------------------------
+def run(sim_type):
+    bus_positions = bus_locations.copy()
+    total_wait = 0
+
+    for t in range(SIM_STEPS):
+
+        # 1) Spawn passengers randomly
+        for n in nodes:
+            if random.random() < SPAWN_RATE:
+                dest = random.choice(nodes)
+                while dest == n:  
+                    dest = random.choice(nodes)
+                passengers.append([n, dest, t, None])
+                waiting[n].append(len(passengers) - 1)
+
+        # 2) Move each bus
+        for i in range(NUM_BUSES):
+            current = bus_positions[i]
+
+            # pick passengers waiting at the stop
+            if waiting[current]:
+                for p_id in waiting[current]:
+                    if passengers[p_id][3] is None:
+                        passengers[p_id][3] = t  # mark pickup time
+
+                waiting[current] = []  # cleared since all picked
+
+            # Smart routing: move towards stop with most waiting
+            if sim_type == "smart":
+                best_stop = current
+                best_score = 0
+
+                dist_map = shortest_path(current)
+
+                for n in nodes:
+                    demand = len(waiting[n])
+                    if demand > 0:
+                        score = demand / (dist_map[n] + 1)
+                        if score > best_score:
+                            best_stop = n
+                            best_score = score
+
+                # Move to neighbor closest to the best stop
+                best_next, best_distance = None, float('inf')
+                for nxt, w in graph[current]:
+                    if dist_map[nxt] < best_distance:
+                        best_next = nxt
+                        best_distance = dist_map[nxt]
+
+                if best_next:
+                    bus_positions[i] = best_next
+
+            # Baseline routing: just move randomly forward loop
+            else:
+                bus_positions[i] = random.choice([n for n, _ in graph[current]])
+
+        # track wait time
+        for o, d, spawn, picked in passengers:
+            if picked is None:
+                total_wait += 1  # still waiting
+
+    return total_wait
+
+
+# ------------------------------
+# RUN BOTH MODES
+# ------------------------------
+print("\n🚍 Running Baseline Routing...")
+baseline = run("baseline")
+print(f"➡ Total passenger waiting time: {baseline}")
+
+# Reset passenger state
+passengers.clear()
+waiting = {n: [] for n in nodes}
+
+print("\n🤖 Running Smart (Dijkstra-Based) Routing...")
+smart = run("smart")
+print(f"➡ Total passenger waiting time: {smart}")
+
+# Result
+reduction = baseline - smart
+percent = (reduction / baseline) * 100 if baseline > 0 else 0
+
+print("\n📊 RESULT SUMMARY")
+print("----------------------------")
+print(f"Baseline Wait Time : {baseline}")
+print(f"Smart Wait Time    : {smart}")
+print(f"Wait Time Saved    : {reduction} ticks")
+print(f"Efficiency Gain    : {percent:.2f}%")
+print("----------------------------\n")

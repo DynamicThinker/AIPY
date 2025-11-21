@@ -1,0 +1,86 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+np.random.seed(42)
+
+# -------------------------------------------------------
+# Create a Parking Lot Grid (10x10 = 100 spots)
+# -------------------------------------------------------
+
+rows, cols = 10, 10
+spots = rows * cols
+
+# randomly initialize parking occupancy (0=empty,1=full)
+parking_lot = np.zeros((rows, cols))
+
+# -------------------------------------------------------
+# Generate Cars Arriving (we assume 10 cars)
+# -------------------------------------------------------
+
+car_count = 10
+car_positions = np.random.randint(0, 10, size=(car_count, 2))  # (x,y) positions
+
+# Generate available parking spots
+available_spots = [(r, c) for r in range(rows) for c in range(cols)]
+available_spots = np.array(available_spots)
+
+# -------------------------------------------------------
+# Build Cost Matrix (Euclidean distance car -> spot)
+# -------------------------------------------------------
+
+cost_matrix = np.zeros((car_count, spots))
+
+for i, (cx, cy) in enumerate(car_positions):
+    for j, (sx, sy) in enumerate(available_spots):
+        cost_matrix[i, j] = np.sqrt((cx - sx)**2 + (cy - sy)**2)
+
+# -------------------------------------------------------
+# Hungarian Algorithm (manual implementation)
+# -------------------------------------------------------
+
+def hungarian(matrix):
+    M = matrix.copy()
+    n, m = M.shape
+
+    # Step 1: row reduction
+    for i in range(n):
+        M[i] -= M[i].min()
+
+    # Step 2: column reduction
+    for j in range(m):
+        M[:,j] -= M[:,j].min()
+
+    # Assignment using greedy cover (not full optimal but works for this scale)
+    assigned_rows = set()
+    assigned_cols = set()
+    assignments = []
+
+    for i in range(n):
+        for j in range(m):
+            if M[i,j] == 0 and j not in assigned_cols and i not in assigned_rows:
+                assigned_rows.add(i)
+                assigned_cols.add(j)
+                assignments.append((i, j))
+                break
+
+    return assignments
+
+assignments = hungarian(cost_matrix)
+
+# -------------------------------------------------------
+# Apply assignments to parking lot
+# -------------------------------------------------------
+
+for car_idx, spot_idx in assignments:
+    r, c = available_spots[spot_idx]
+    parking_lot[r][c] += 1  # mark used spot
+
+# -------------------------------------------------------
+# Generate Heatmap
+# -------------------------------------------------------
+
+plt.figure(figsize=(7,7))
+plt.imshow(parking_lot, cmap='hot', interpolation='nearest')
+plt.colorbar(label="Parking Usage")
+plt.title("Smart Parking Allocation — Usage Heatmap")
+plt.show()

@@ -1,0 +1,215 @@
+import random
+import time
+import matplotlib.pyplot as plt
+
+# --- Configuration ---
+GRID_WIDTH = 20
+GRID_HEIGHT = 20
+NUM_MONITORS = 15
+NUM_FACTORIES = 3
+SIMULATION_TICKS = 50
+DIFFUSION_RATE = 0.1    # How fast pollution spreads to neighbors
+CLEANING_RATE = 5       # Base amount of pollution an agent removes per tick
+CRITICAL_THRESHOLD = 30 # Level that triggers an alert
+
+class Environment:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+        # 2D Grid for pollution levels
+        self.grid = [[0.0 for _ in range(width)] for _ in range(height)]
+        self.factories = []
+
+    def add_factory(self, x, y):
+        self.factories.append((x, y))
+
+    def get_pollution(self, x, y):
+        if 0 <= x < self.width and 0 <= y < self.height:
+            return self.grid[y][x]
+        return 0
+
+    def reduce_pollution(self, x, y, amount):
+        if 0 <= x < self.width and 0 <= y < self.height:
+            self.grid[y][x] = max(0, self.grid[y][x] - amount)
+
+    def update_physics(self):
+        """
+        Simulates pollution generation and diffusion.
+        """
+        # 1. Factories produce pollution
+        for fx, fy in self.factories:
+            self.grid[fy][fx] += random.uniform(5, 15)
+
+        # 2. Diffusion (Pollution spreads to neighbors)
+        # We create a temp grid to avoid reading updated values immediately
+        new_grid = [row[:] for row in self.grid]
+        
+        for y in range(self.height):
+            for x in range(self.width):
+                current_val = self.grid[y][x]
+                if current_val > 0:
+                    # Spread to 4 neighbors
+                    neighbors = [
+                        (x+1, y), (x-1, y), (x, y+1), (x, y-1)
+                    ]
+                    amount_to_spread = current_val * DIFFUSION_RATE
+                    per_neighbor = amount_to_spread / 4
+                    
+                    for nx, ny in neighbors:
+                        if 0 <= nx < self.width and 0 <= ny < self.height:
+                            new_grid[ny][nx] += per_neighbor
+                            new_grid[y][x] -= per_neighbor # Conservation of mass
+        
+        self.grid = new_grid
+
+    def get_average_pollution(self):
+        total = sum(sum(row) for row in self.grid)
+        return total / (self.width * self.height)
+
+class MonitorAgent:
+    def __init__(self, id, x, y, env):
+        self.id = id
+        self.x = x
+        self.y = y
+        self.env = env
+        self.alert_active = False
+        self.cleaning_power = CLEANING_RATE
+
+    def sense_and_act(self, neighbors):
+        """
+        1. Check local pollution.
+        2. If high, trigger ALERT (Distributed Logic).
+        3. If neighbor is alerting, boost cleaning power.
+        4. Clean pollution.
+        """
+        local_pollution = self.env.get_pollution(self.x, self.y)
+        
+        # 1. Check Thresholds & Alert Logic
+        if local_pollution > CRITICAL_THRESHOLD:
+            self.alert_active = True
+        elif local_pollution < CRITICAL_THRESHOLD / 2:
+            self.alert_active = False
+
+        # 2. Check Neighbors for coordination
+        # If a nearby agent is alerting, I should work harder too
+        neighbor_alerting = any(n.alert_active for n in neighbors)
+        
+        if self.alert_active or neighbor_alerting:
+            # Emergency Mode: Boost power!
+            current_power = self.cleaning_power * 2.0 
+        else:
+            current_power = self.cleaning_power
+
+        # 3. Clean (Mitigate)
+        if local_pollution > 0:
+            self.env.reduce_pollution(self.x, self.y, current_power)
+            # Also clean immediate area slightly (scrubbers have range)
+            self.env.reduce_pollution(self.x+1, self.y, current_power * 0.5)
+            self.env.reduce_pollution(self.x-1, self.y, current_power * 0.5)
+            self.env.reduce_pollution(self.x, self.y+1, current_power * 0.5)
+            self.env.reduce_pollution(self.x, self.y-1, current_power * 0.5)
+
+# --- Visualization Helper ---
+def print_grid(env, agents):
+    # Simple ASCII Heatmap
+    # . = Clean, o = Low, O = Med, @ = High, # = Source
+    output = []
+    output.append("-" * (env.width + 2))
+    
+    agent_locs = {(a.x, a.y): a for a in agents}
+    factory_locs = set(env.factories)
+
+    for y in range(env.height):
+        row_str = "|"
+        for x in range(env.width):
+            val = env.get_pollution(x, y)
+            char = " "
+            
+            if (x, y) in factory_locs:
+                char = "🏭" # Factory
+            elif (x, y) in agent_locs:
+                agent = agent_locs[(x, y)]
+                char = "🚨" if agent.alert_active else "🤖"
+            else:
+                if val < 5: char = " "
+                elif val < 20: char = "."
+                elif val < 50: char = "o"
+                else: char = "@"
+            row_str += char
+        row_str += "|"
+        output.append(row_str)
+    output.append("-" * (env.width + 2))
+    print("\n".join(output))
+
+# --- Main Loop ---
+def run_simulation():
+    print("Starting Pollution Control Simulation...")
+    env = Environment(GRID_WIDTH, GRID_HEIGHT)
+    
+    # Place Factories (Sources)
+    for _ in range(NUM_FACTORIES):
+        env.add_factory(random.randint(0, GRID_WIDTH-1), random.randint(0, GRID_HEIGHT-1))
+
+    # Place Agents (Randomly)
+    agents = []
+    for i in range(NUM_MONITORS):
+        ax = random.randint(0, GRID_WIDTH-1)
+        ay = random.randint(0, GRID_HEIGHT-1)
+        agents.append(MonitorAgent(i, ax, ay, env))
+
+    history = []
+
+    for tick in range(SIMULATION_TICKS):
+        # 1. Environment updates (physics/diffusion)
+        env.update_physics()
+
+        # 2. Agents act (sensing and coordination)
+        # Note: In a real distributed system, agents only know about neighbors within range.
+        # We simulate this by finding neighbors based on distance.
+        for agent in agents:
+            # Find nearby neighbors (within 5 units)
+            nearby_agents = [
+                other for other in agents 
+                if other != agent and abs(other.x - agent.x) + abs(other.y - agent.y) < 5
+            ]
+            agent.sense_and_act(nearby_agents)
+
+        # 3. Record Data
+        avg_pol = env.get_average_pollution()
+        history.append(avg_pol)
+        
+        print(f"\n--- TICK {tick} | Avg Pollution: {avg_pol:.2f} ---")
+        # Only print map every 5 ticks to reduce clutter
+        if tick % 5 == 0:
+            print_grid(env, agents)
+        
+        # time.sleep(0.1)
+
+    # --- Final Output ---
+    print("\nSimulation Complete.")
+    
+    # Text-based Graph (Ascii fallback)
+    print("\n[Pollution Levels Over Time]")
+    max_val = max(history)
+    for i, val in enumerate(history):
+        if i % 2 == 0: # Skip every other tick for shorter output
+            bar = "#" * int((val / max_val) * 40)
+            print(f"T{i:02}: {bar} ({val:.1f})")
+
+    # Matplotlib Graph (The official output requirement)
+    try:
+        plt.figure(figsize=(10, 6))
+        plt.plot(history, label='Average Pollution Level', color='purple')
+        plt.axhline(y=CRITICAL_THRESHOLD, color='r', linestyle='--', label='Critical Threshold')
+        plt.title('Pollution Mitigation Over Time')
+        plt.xlabel('Time (Ticks)')
+        plt.ylabel('Pollution Density')
+        plt.legend()
+        plt.grid(True)
+        print("\nGenerating graph window... (Close window to exit script)")
+        plt.show()
+    except Exception as e:
+        print("\n(Matplotlib not found or failed, relying on text graph above)")
+
+if __name__ == "__main__":
+    run_simulation()

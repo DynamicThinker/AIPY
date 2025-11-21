@@ -1,0 +1,208 @@
+import random
+import math
+import time
+from collections import deque
+
+# --- Configuration ---
+GRID_SIZE = 50           # The city is a 50x50 grid
+NUM_AMBULANCES = 3
+NUM_FIRE_TRUCKS = 3
+SIMULATION_TICKS = 30    # How long to run the simulation
+TICK_SPEED = 0.5         # Delay between ticks for readability (seconds)
+
+# --- Constants ---
+TYPE_FIRE = "FIRE"
+TYPE_MEDICAL = "MEDICAL"
+
+STATUS_IDLE = "IDLE"
+STATUS_EN_ROUTE = "EN_ROUTE"
+STATUS_WORKING = "WORKING"
+
+class Incident:
+    def __init__(self, id, x, y, type, creation_tick):
+        self.id = id
+        self.x = x
+        self.y = y
+        self.type = type
+        self.creation_tick = creation_tick
+        self.assigned_tick = None
+        self.arrival_tick = None
+        self.resolved = False
+
+    def __repr__(self):
+        return f"[{self.type} at ({self.x}, {self.y})]"
+
+class Agent:
+    def __init__(self, id, type, x, y, speed=2):
+        self.id = id
+        self.type = type
+        self.x = x
+        self.y = y
+        self.speed = speed
+        self.status = STATUS_IDLE
+        self.target_incident = None
+        self.work_remaining = 0
+
+    def distance_to(self, target_x, target_y):
+        return math.sqrt((self.x - target_x)**2 + (self.y - target_y)**2)
+
+    def assign(self, incident, current_tick):
+        self.status = STATUS_EN_ROUTE
+        self.target_incident = incident
+        incident.assigned_tick = current_tick
+        print(f"  -> 🚑 🚒 {self.type} {self.id} assigned to {incident}")
+
+    def update(self, current_tick):
+        """
+        Updates the agent's position or state for a single time tick.
+        """
+        if self.status == STATUS_IDLE:
+            return
+
+        if self.status == STATUS_EN_ROUTE:
+            # Move towards target
+            dist = self.distance_to(self.target_incident.x, self.target_incident.y)
+            
+            # If close enough to 'arrive' in this tick
+            if dist <= self.speed:
+                self.x = self.target_incident.x
+                self.y = self.target_incident.y
+                self.status = STATUS_WORKING
+                self.target_incident.arrival_tick = current_tick
+                self.work_remaining = 3 # Takes 3 ticks to resolve an incident
+                print(f"  -> 🏁 Agent {self.id} arrived at Incident {self.target_incident.id}. Starting work.")
+            else:
+                # Move along the vector
+                dx = self.target_incident.x - self.x
+                dy = self.target_incident.y - self.y
+                factor = self.speed / dist
+                self.x += dx * factor
+                self.y += dy * factor
+
+        elif self.status == STATUS_WORKING:
+            self.work_remaining -= 1
+            if self.work_remaining <= 0:
+                print(f"  -> ✅ Agent {self.id} resolved Incident {self.target_incident.id}. Returning to IDLE.")
+                self.target_incident.resolved = True
+                self.status = STATUS_IDLE
+                self.target_incident = None
+
+class DispatcherAgent:
+    """
+    The Central AI Agent that makes decisions based on the Nearest Neighbor Hint.
+    """
+    def __init__(self, agents):
+        self.agents = agents
+        self.incident_queue = deque()
+        self.completed_incidents = []
+
+    def receive_incident(self, incident):
+        self.incident_queue.append(incident)
+        print(f"  -> 📡 Dispatcher received new: {incident}")
+
+    def process_queue(self, current_tick):
+        # Try to assign pending incidents
+        # We iterate a copy because we might remove items
+        pending_incidents = list(self.incident_queue)
+        
+        for incident in pending_incidents:
+            assigned = self._assign_nearest_agent(incident, current_tick)
+            if assigned:
+                self.incident_queue.remove(incident)
+
+    def _assign_nearest_agent(self, incident, current_tick):
+        """
+        Algorithm: Greedy Optimization / Nearest Neighbor.
+        Finds the closest IDLE agent of the correct type.
+        """
+        best_agent = None
+        min_dist = float('inf')
+
+        # Determine required agent type
+        required_type = "AMBULANCE" if incident.type == TYPE_MEDICAL else "FIRE_TRUCK"
+
+        for agent in self.agents:
+            # Constraints: Must be correct type AND Idle
+            if agent.type == required_type and agent.status == STATUS_IDLE:
+                dist = agent.distance_to(incident.x, incident.y)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_agent = agent
+
+        if best_agent:
+            best_agent.assign(incident, current_tick)
+            self.completed_incidents.append(incident)
+            return True
+        else:
+            return False # No agents available yet, keep in queue
+
+    def get_stats(self):
+        resolved_count = 0
+        total_response_time = 0
+        
+        print("\n" + "="*40)
+        print("FINAL STATS")
+        print("="*40)
+        
+        for inc in self.completed_incidents:
+            if inc.arrival_tick is not None:
+                response_time = inc.arrival_tick - inc.creation_tick
+                print(f"Incident {inc.id}: Response Time = {response_time:.1f} ticks")
+                total_response_time += response_time
+                resolved_count += 1
+            else:
+                print(f"Incident {inc.id}: Unresolved or Agent En Route")
+
+        avg_time = total_response_time / resolved_count if resolved_count > 0 else 0
+        return avg_time
+
+# --- Main Simulation Loop ---
+def run_simulation():
+    print("--- STARTING EMERGENCY RESPONSE SIMULATION ---")
+    print(f"Map Size: {GRID_SIZE}x{GRID_SIZE}")
+    print("Objective: Minimize Average Response Time using Nearest Neighbor search.\n")
+
+    # 1. Initialize Agents
+    agents = []
+    for i in range(NUM_AMBULANCES):
+        # Random start positions
+        agents.append(Agent(f"A{i}", "AMBULANCE", random.randint(0, GRID_SIZE), random.randint(0, GRID_SIZE)))
+    
+    for i in range(NUM_FIRE_TRUCKS):
+        agents.append(Agent(f"F{i}", "FIRE_TRUCK", random.randint(0, GRID_SIZE), random.randint(0, GRID_SIZE)))
+
+    dispatcher = DispatcherAgent(agents)
+    incident_counter = 0
+
+    # 2. Run Time Steps
+    for tick in range(SIMULATION_TICKS):
+        print(f"\n--- TICK {tick} ---")
+        
+        # A. Randomly generate incidents (10% chance per tick)
+        if random.random() < 0.3:
+            incident_counter += 1
+            i_type = random.choice([TYPE_FIRE, TYPE_MEDICAL])
+            new_incident = Incident(incident_counter, random.randint(0, GRID_SIZE), random.randint(0, GRID_SIZE), i_type, tick)
+            dispatcher.receive_incident(new_incident)
+
+        # B. Dispatcher Logic (Assign agents)
+        dispatcher.process_queue(tick)
+
+        # C. Update Agents (Move and Work)
+        for agent in agents:
+            agent.update(tick)
+        
+        # Optional: Simple Visualization of counts
+        idle_count = sum(1 for a in agents if a.status == STATUS_IDLE)
+        working_count = sum(1 for a in agents if a.status != STATUS_IDLE)
+        print(f"Status: {idle_count} Idle, {working_count} Active, Queue: {len(dispatcher.incident_queue)}")
+        
+        # Simulate time passing
+        # time.sleep(TICK_SPEED) # Uncomment to watch in real-time
+
+    # 3. Output Final Stats
+    avg_response = dispatcher.get_stats()
+    print(f"\n📢 Average Response Time: {avg_response:.2f} ticks")
+
+if __name__ == "__main__":
+    run_simulation()

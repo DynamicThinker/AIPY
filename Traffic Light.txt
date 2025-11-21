@@ -1,0 +1,105 @@
+import numpy as np
+import matplotlib.pyplot as plt
+
+np.random.seed(42)
+
+# -------------------------------------------------------
+# Traffic environment setup
+# -------------------------------------------------------
+
+# Lanes: North, South, East, West
+lanes = ["N", "S", "E", "W"]
+
+def generate_traffic():
+    # random vehicles per timestep (0–10)
+    return {l: np.random.randint(0, 11) for l in lanes}
+
+# -------------------------------------------------------
+# Baseline fixed-signal control
+# -------------------------------------------------------
+
+def fixed_signal_sim(steps, green_time=5):
+    queues = {l: 0 for l in lanes}
+    delays = []
+
+    timer = 0
+    current_green = ["N", "S"]  # NS green, EW red
+
+    for t in range(steps):
+        incoming = generate_traffic()
+        for l in lanes:
+            queues[l] += incoming[l]
+
+        # serve cars
+        for l in current_green:
+            served = min(queues[l], 3)  # 3 cars pass per timestep
+            queues[l] -= served
+
+        # calculate delay
+        avg_delay = np.mean(list(queues.values()))
+        delays.append(avg_delay)
+
+        # switch every green_time steps
+        timer += 1
+        if timer >= green_time:
+            timer = 0
+            current_green = ["E", "W"] if current_green == ["N", "S"] else ["N", "S"]
+
+    return delays
+
+
+# -------------------------------------------------------
+# Traffic Light Optimizer (Adaptive Agent)
+# -------------------------------------------------------
+
+def adaptive_signal_sim(steps):
+    queues = {l: 0 for l in lanes}
+    delays = []
+
+    for t in range(steps):
+        incoming = generate_traffic()
+        for l in lanes:
+            queues[l] += incoming[l]
+
+        # decide green direction based on total queue weight
+        ns_load = queues["N"] + queues["S"]
+        ew_load = queues["E"] + queues["W"]
+
+        if ns_load >= ew_load:
+            current_green = ["N", "S"]
+        else:
+            current_green = ["E", "W"]
+
+        # serve cars
+        for l in current_green:
+            served = min(queues[l], 3)
+            queues[l] -= served
+
+        avg_delay = np.mean(list(queues.values()))
+        delays.append(avg_delay)
+
+    return delays
+
+
+# -------------------------------------------------------
+# Run Simulation
+# -------------------------------------------------------
+
+steps = 200
+
+baseline_delay = fixed_signal_sim(steps)
+optimized_delay = adaptive_signal_sim(steps)
+
+# -------------------------------------------------------
+# Plot Results
+# -------------------------------------------------------
+
+plt.figure(figsize=(11,5))
+plt.plot(baseline_delay, label="Baseline Fixed Timer", linewidth=2)
+plt.plot(optimized_delay, label="Adaptive Optimized Agent", linewidth=2)
+plt.xlabel("Time Step")
+plt.ylabel("Average Waiting Vehicles")
+plt.title("Traffic Light Optimization — Average Delay Before vs After")
+plt.legend()
+plt.grid(True)
+plt.show()
